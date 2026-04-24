@@ -294,6 +294,10 @@ async def async_request_openai_completions(
             payload["ignore_eos"] = request_func_input.ignore_eos
         if request_func_input.extra_body:
             payload.update(request_func_input.extra_body)
+        
+        if not payload.get("stream", False):
+            payload.pop("stream_options", None)
+
         headers = {"Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY')}"}
         if request_func_input.request_id:
             headers["x-request-id"] = request_func_input.request_id
@@ -304,6 +308,7 @@ async def async_request_openai_completions(
         generated_text = ""
         st = time.perf_counter()
         most_recent_timestamp = st
+        print(f"DEBUG sending payload stream: {payload.get('stream')}")
         try:
             async with session.post(
                 url=api_url, json=payload, headers=headers
@@ -340,6 +345,7 @@ async def async_request_openai_completions(
                                 most_recent_timestamp = timestamp
                                 generated_text += text or ""
                             if usage := data.get("usage"):
+                                print(f"DEBUG usage: {usage}")
                                 output.output_tokens = usage.get("completion_tokens")
                     if first_chunk_received:
                         output.success = True
@@ -352,7 +358,9 @@ async def async_request_openai_completions(
                     output.generated_text = generated_text
                     output.latency = most_recent_timestamp - st
                 else:
-                    output.error = response.reason or ""
+                    error_content = await response.text()
+                    print(f"DEBUG error response: {response.status}, {error_content}", flush=True)
+                    output.error = error_content or response.reason or ""
                     output.success = False
         except Exception:
             output.success = False
