@@ -380,6 +380,14 @@ class Scheduler(SchedulerInterface):
 
         self.kv_cache_manager.new_step_starts()
 
+        # Isolate running beam search requests to prevent mixing with normal decodes!
+        original_running = self.running
+        running_beam_searches = [r for r in self.running if r.sampling_params and getattr(r.sampling_params, "use_beam_search", False)]
+        
+        if running_beam_searches:
+            self.running = [running_beam_searches[0]]
+            logger.info(f"DEBUG: Isolating running beam search request {self.running[0].request_id} for scheduling")
+
         # First, schedule the RUNNING requests.
         req_index = 0
         while req_index < len(self.running) and token_budget > 0:
@@ -560,9 +568,13 @@ class Scheduler(SchedulerInterface):
             )
             assert len(scheduled_loras) <= self.lora_config.max_loras
 
+        # Restore original self.running list!
+        self.running = original_running
+
         # Next, schedule the WAITING requests.
         if not preempted_reqs and self._pause_state == PauseState.UNPAUSED:
             step_skipped_waiting = create_request_queue(self.policy)
+            break_after_this = False
 
             while (self.waiting or self.skipped_waiting) and token_budget > 0:
                 if len(self.running) == self.max_num_running_reqs:
@@ -573,6 +585,17 @@ class Scheduler(SchedulerInterface):
 
                 request = request_queue.peek_request()
                 request_id = request.request_id
+
+                is_beam_search = request.sampling_params and getattr(request.sampling_params, "use_beam_search", False)
+                if is_beam_search:
+                    if scheduled_new_reqs or scheduled_resumed_reqs or scheduled_running_reqs:
+                        # Batch is not empty! Skip this beam search request for now!
+                        request_queue.pop_request()
+                        step_skipped_waiting.prepend_request(request)
+                        continue
+                    else:
+                        break_after_this = True
+                        logger.info(f"DEBUG: Isolating waiting beam search request {request_id} for scheduling")
 
                 # try to promote blocked statuses while traversing skipped queue.
                 if self._is_blocked_waiting_status(
@@ -849,6 +872,9 @@ class Scheduler(SchedulerInterface):
                         self.encoder_cache_manager.allocate(request, i)
                         if self.ec_connector is not None:
                             self.ec_connector.update_state_after_alloc(request, i)
+
+                if break_after_this:
+                    break
 
             # re-queue requests skipped in this pass ahead of older skipped items.
             if step_skipped_waiting:
