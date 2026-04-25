@@ -62,7 +62,7 @@ from vllm.renderers.inputs.preprocess import (
     extract_prompt_components,
     extract_prompt_len,
 )
-from vllm.sampling_params import BeamSearchParams, SamplingParams
+from vllm.sampling_params import BeamSearchParams, RequestOutputKind, SamplingParams
 from vllm.tokenizers import TokenizerLike
 from vllm.tool_parsers import ToolParser
 from vllm.tracing import (

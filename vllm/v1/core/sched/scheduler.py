@@ -386,7 +386,7 @@ class Scheduler(SchedulerInterface):
         
         if running_beam_searches:
             self.running = [running_beam_searches[0]]
-            logger.info(f"DEBUG: Isolating running beam search request {self.running[0].request_id} for scheduling")
+            logger.debug(f"Isolating single running beam request {self.running[0].request_id} for scheduling")
 
         # First, schedule the RUNNING requests.
         req_index = 0
@@ -587,9 +587,12 @@ class Scheduler(SchedulerInterface):
                 request_id = request.request_id
 
                 is_beam_search = request.sampling_params and getattr(request.sampling_params, "use_beam_search", False)
+                orig_req_id = request_id.split("-beam-")[0] if "-beam-" in request_id else request_id
+
+                all_scheduled = scheduled_new_reqs + scheduled_resumed_reqs + scheduled_running_reqs
+
                 if is_beam_search:
                     if scheduled_new_reqs or scheduled_resumed_reqs or scheduled_running_reqs:
-                        # Batch is not empty! Skip this beam search request for now!
                         request_queue.pop_request()
                         step_skipped_waiting.prepend_request(request)
                         continue
@@ -700,15 +703,28 @@ class Scheduler(SchedulerInterface):
 
                     # chunked prefill has to be enabled explicitly to allow
                     # pooling requests to be chunked
+                    num_new_tokens_for_budget = num_new_tokens
+                    if is_beam_search:
+                        already_has_parent = False
+                        for r in scheduled_new_reqs + scheduled_resumed_reqs + scheduled_running_reqs:
+                            r_parent = r.request_id.split("-beam-")[0] if "-beam-" in r.request_id else r.request_id
+                            if r_parent == orig_req_id:
+                                already_has_parent = True
+                                break
+                        if already_has_parent:
+                            num_new_tokens_for_budget = 0
+
                     if (
                         not self.scheduler_config.enable_chunked_prefill
-                        and num_new_tokens > token_budget
+                        and num_new_tokens_for_budget > token_budget
                     ):
                         # If chunked_prefill is disabled,
                         # we can stop the scheduling here.
                         break
 
-                    num_new_tokens = min(num_new_tokens, token_budget)
+                    if num_new_tokens_for_budget > 0:
+                        num_new_tokens = min(num_new_tokens, token_budget)
+
                     assert num_new_tokens > 0
 
                     # Schedule encoder inputs.
@@ -854,7 +870,21 @@ class Scheduler(SchedulerInterface):
                     request_id
                 )
                 num_scheduled_tokens[request_id] = num_new_tokens
-                token_budget -= num_new_tokens
+                
+                # Recalculate budget consumption!
+                num_new_tokens_for_budget = num_new_tokens
+                if is_beam_search:
+                    already_has_parent = False
+                    for r in scheduled_new_reqs + scheduled_resumed_reqs + scheduled_running_reqs:
+                        if r != request:
+                            r_parent = r.request_id.split("-beam-")[0] if "-beam-" in r.request_id else r.request_id
+                            if r_parent == orig_req_id:
+                                already_has_parent = True
+                                break
+                    if already_has_parent:
+                        num_new_tokens_for_budget = 0
+                        
+                token_budget -= num_new_tokens_for_budget
                 request.status = RequestStatus.RUNNING
                 request.num_computed_tokens = num_computed_tokens
                 # Encoder-related.
@@ -872,7 +902,7 @@ class Scheduler(SchedulerInterface):
                         self.encoder_cache_manager.allocate(request, i)
                         if self.ec_connector is not None:
                             self.ec_connector.update_state_after_alloc(request, i)
-
+                            
                 if break_after_this:
                     break
 
