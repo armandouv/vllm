@@ -29,7 +29,11 @@ class AsyncScheduler(Scheduler):
             # The request will generate a new token plus num_spec_tokens
             # in this scheduling step.
             cur_num_spec_tokens = len(spec_decode_tokens.get(req_id, ()))
-            request.num_output_placeholders += 1 + cur_num_spec_tokens
+            if getattr(request.sampling_params, "use_beam_search", False):
+                beam_width = getattr(request.sampling_params, "best_of", 1)
+                request.num_output_placeholders += (beam_width - 1) * self.block_size
+            else:
+                request.num_output_placeholders += 1 + cur_num_spec_tokens
             # Add placeholders for the new draft/spec tokens.
             # We will update the actual spec token ids in the worker process.
             request.spec_token_ids = self._spec_token_placeholders
@@ -50,7 +54,8 @@ class AsyncScheduler(Scheduler):
 
         # Update the number of output placeholders.
         request.num_output_placeholders -= len(new_token_ids)
-        assert request.num_output_placeholders >= 0
+        if not getattr(request.sampling_params, "use_beam_search", False):
+            assert request.num_output_placeholders >= 0
 
         # Cache the new tokens. Preempted requests should be skipped.
         if status_before_update == RequestStatus.RUNNING:

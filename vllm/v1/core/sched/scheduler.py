@@ -1691,15 +1691,17 @@ class Scheduler(SchedulerInterface):
         # a request is still being prefilled, we expect the model runner
         # to return empty token ids for the request.
         stopped = False
+        is_beam_search = request.sampling_params and getattr(request.sampling_params, "use_beam_search", False)
         for num_new, output_token_id in enumerate(new_token_ids, 1):
             request.append_output_token_ids(output_token_id)
 
-            # Check for stop and update request state.
-            # This must be called before we make the EngineCoreOutput.
-            stopped = check_stop(request, self.max_model_len)
-            if stopped:
-                del new_token_ids[num_new:]  # Trim new tokens if needed.
-                break
+            if not stopped:
+                # Check for stop and update request state.
+                # This must be called before we make the EngineCoreOutput.
+                stopped = check_stop(request, self.max_model_len)
+                if stopped and not is_beam_search:
+                    del new_token_ids[num_new:]  # Trim new tokens if needed.
+                    break
         return new_token_ids, stopped
 
     def _free_encoder_inputs(self, request: Request) -> None:
