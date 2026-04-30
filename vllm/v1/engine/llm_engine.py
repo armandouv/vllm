@@ -260,7 +260,8 @@ class LLMEngine:
 
         n = params.n if isinstance(params, SamplingParams) else 1
 
-        if n == 1:
+        use_beam_search = getattr(params, "use_beam_search", False)
+        if n == 1 or use_beam_search:
             # Make a new RequestState and queue.
             self.output_processor.add_request(request, prompt_text, None, 0)
             # Add the request to EngineCore.

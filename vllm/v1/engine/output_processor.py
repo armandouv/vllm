@@ -149,6 +149,7 @@ class RequestState:
         n: int | None = None,
         temperature: float | None = None,
         stream_input: bool = False,
+        use_beam_search: bool = False,
     ):
         self.request_id = request_id
         self.external_req_id = external_req_id
@@ -169,6 +170,7 @@ class RequestState:
         self.top_p = top_p
         self.n = n
         self.temperature = temperature
+        self.use_beam_search = use_beam_search
         self.is_prefilling = True
         self.queue = queue
         self.num_cached_tokens = 0
@@ -264,6 +266,7 @@ class RequestState:
             log_stats=log_stats,
             stream_interval=stream_interval,
             stream_input=request.resumable,
+            use_beam_search=getattr(sampling_params, "use_beam_search", False) if sampling_params else False,
         )
 
     def make_request_output(
@@ -639,6 +642,22 @@ class OutputProcessor:
                 # 3) Compute sample and prompt logprobs for request,
                 # if required.
                 req_state.logprobs_processor.update_from_output(engine_core_output)
+
+            # HACK for testing: Print all beams if it is a beam search request!
+            if getattr(req_state, "use_beam_search", False):
+                print(f"\n[HACK] All beams for request {req_id}:")
+                if engine_core_output.new_logprobs is not None:
+                    token_ids_array = engine_core_output.new_logprobs.logprob_token_ids
+                    print(f"  Raw token IDs shape: {token_ids_array.shape}")
+                    # Hard-coded for beam_width=10 and max_tokens=4
+                    for b in range(10):
+                        beam_tokens = []
+                        for t in range(4):
+                            idx = b * 4 + t
+                            if idx < token_ids_array.shape[0]:
+                                beam_tokens.append(int(token_ids_array[idx, 0]))
+                        beam_text = self.tokenizer.decode(beam_tokens)
+                        print(f"    Beam {b}: {beam_text.strip()}")
 
             # 4) Create and handle RequestOutput objects.
             if request_output := req_state.make_request_output(

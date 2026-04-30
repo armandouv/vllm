@@ -580,7 +580,7 @@ class Scheduler(SchedulerInterface):
             step_skipped_waiting = create_request_queue(self.policy)
             break_after_this = False
 
-            while (self.waiting or self.skipped_waiting) and token_budget > 0:
+            while (self.waiting or self.skipped_waiting) and token_budget > 0 and not running_beam_searches:
                 if len(self.running) == self.max_num_running_reqs:
                     break
 
@@ -1507,7 +1507,13 @@ class Scheduler(SchedulerInterface):
                 and request.sampling_params.logprobs is not None
                 and logprobs
             ):
-                new_logprobs = logprobs.slice_request(req_index, len(new_token_ids))
+                num_positions = len(new_token_ids)
+                if request.sampling_params and getattr(request.sampling_params, "use_beam_search", False):
+                    beam_width = 30
+                    if request.sampling_params.extra_args:
+                        beam_width = request.sampling_params.extra_args.get("beam_width", 30)
+                    num_positions = beam_width * len(new_token_ids)
+                new_logprobs = logprobs.slice_request(req_index, num_positions)
 
             if num_nans_in_logits is not None and req_id in num_nans_in_logits:
                 request.num_nans_in_logits = num_nans_in_logits[req_id]
