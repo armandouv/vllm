@@ -649,11 +649,13 @@ class OutputProcessor:
                 if engine_core_output.new_logprobs is not None:
                     token_ids_array = engine_core_output.new_logprobs.logprob_token_ids
                     print(f"  Raw token IDs shape: {token_ids_array.shape}")
-                    # Hard-coded for beam_width=10 and max_tokens=4
-                    for b in range(10):
+                    # Dynamically unpack beam_width=30 and max_tokens=4
+                    BEAM_WIDTH = 30
+                    MAX_TOKENS = 4
+                    for b in range(BEAM_WIDTH):
                         beam_tokens = []
-                        for t in range(4):
-                            idx = b * 4 + t
+                        for t in range(MAX_TOKENS):
+                            idx = b * MAX_TOKENS + t
                             if idx < token_ids_array.shape[0]:
                                 beam_tokens.append(int(token_ids_array[idx, 0]))
                         beam_text = self.tokenizer.decode(beam_tokens)

@@ -601,23 +601,10 @@ class RandomDataset(BenchmarkDataset):
             inner_seq = ((offsets[i] + i + np.arange(input_lens[i])) %
                          vocab_size).tolist()
             token_sequence = prefix_token_ids + inner_seq
-            prompt = tokenizer.decode(token_sequence)
-            # After decoding the prompt we have to encode and decode it again.
-            # This is done because in some cases N consecutive tokens
-            # give a string tokenized into != N number of tokens.
-            # For example for GPT2Tokenizer:
-            # [6880, 6881] -> ['Ġcalls', 'here'] ->
-            # [1650, 939, 486] -> ['Ġcall', 'sh', 'ere']
-            # To avoid uncontrolled change of the prompt length,
-            # the encoded sequence is truncated before being decoded again.
-            total_input_len = prefix_len + int(input_lens[i])
-            re_encoded_sequence = tokenizer.encode(
-                prompt, add_special_tokens=False)[:total_input_len]
-            prompt = tokenizer.decode(re_encoded_sequence)
-            total_input_len = len(re_encoded_sequence)
+            total_input_len = len(token_sequence)
             requests.append(
                 SampleRequest(
-                    prompt=prompt,
+                    prompt=token_sequence,
                     prompt_len=total_input_len,
                     expected_output_len=int(output_lens[i]),
                     request_id=request_id_prefix + str(i),
