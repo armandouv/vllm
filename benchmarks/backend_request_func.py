@@ -294,6 +294,8 @@ async def async_request_openai_completions(
             payload["ignore_eos"] = request_func_input.ignore_eos
         if request_func_input.extra_body:
             payload.update(request_func_input.extra_body)
+        if "extra_args" in payload:
+            payload["vllm_xargs"] = payload.pop("extra_args")
         
         if not payload.get("stream", False):
             payload.pop("stream_options", None)
@@ -413,6 +415,8 @@ async def async_request_openai_chat_completions(
             payload["ignore_eos"] = request_func_input.ignore_eos
         if request_func_input.extra_body:
             payload.update(request_func_input.extra_body)
+        if "extra_args" in payload:
+            payload["vllm_xargs"] = payload.pop("extra_args")
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY')}",

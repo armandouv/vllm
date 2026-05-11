@@ -635,7 +635,8 @@ def main(args: argparse.Namespace):
     }
     if args.use_beam_search:
         sampling_params["use_beam_search"] = True
-        sampling_params["n"] = 30
+        sampling_params["n"] = 1
+        sampling_params["extra_args"] = {"beam_width": args.beam_width}
         sampling_params["max_tokens"] = 4
         sampling_params["stream"] = False
 
@@ -752,6 +753,12 @@ if __name__ == "__main__":
         "Name or path of the tokenizer, if not using the default tokenizer.",  # noqa: E501
     )
     parser.add_argument("--use-beam-search", action="store_true")
+    parser.add_argument(
+        "--beam-width",
+        type=int,
+        default=30,
+        help="Beam width to use when use-beam-search is enabled.",
+    )
     parser.add_argument(
         "--num-prompts",
         type=int,

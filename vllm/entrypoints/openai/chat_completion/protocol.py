@@ -493,6 +493,7 @@ class ChatCompletionRequest(OpenAIBaseModel):
             temperature=temperature,
             length_penalty=self.length_penalty,
             include_stop_str_in_output=self.include_stop_str_in_output,
+            extra_args=self.vllm_xargs or None,
         )
 
     def to_sampling_params(

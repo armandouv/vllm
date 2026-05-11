@@ -210,6 +210,7 @@ class OpenAIServing:
             use_beam_search=True,
             logprobs=60, # Hardcode 60 for now, or use params.logprobs if we add it!
             output_kind=RequestOutputKind.FINAL_ONLY,
+            extra_args=params.extra_args,
         )
         
         async for output in self.engine_client.generate(
