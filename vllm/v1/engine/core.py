@@ -126,6 +126,16 @@ class EngineCore:
 
         # Setup KV Caches and update CacheConfig after profiling.
         kv_cache_config = self._initialize_kv_caches(vllm_config)
+        if vllm_config.device_config.device_type == "tpu":
+            add_cfg = getattr(vllm_config, "additional_config", {}) or {}
+            max_beam_width = add_cfg.get("max_beam_width", 100) if isinstance(add_cfg, dict) else 100
+            reserved_headroom = 2 * max_beam_width + 1
+            kv_cache_config.num_blocks -= reserved_headroom
+            vllm_config.cache_config.num_gpu_blocks -= reserved_headroom
+            if vllm_config.cache_config.num_gpu_blocks_override is not None:
+                vllm_config.cache_config.num_gpu_blocks_override -= reserved_headroom
+            logger.info("Reserved %d KV blocks for beam search headroom", reserved_headroom)
+        
         self.structured_output_manager = StructuredOutputManager(vllm_config)
 
         # Setup scheduler.

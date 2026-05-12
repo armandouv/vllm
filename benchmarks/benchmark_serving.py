@@ -635,8 +635,7 @@ def main(args: argparse.Namespace):
     }
     if args.use_beam_search:
         sampling_params["use_beam_search"] = True
-        sampling_params["n"] = 1
-        sampling_params["extra_args"] = {"beam_width": args.beam_width}
+        sampling_params["n"] = args.beam_width
         sampling_params["max_tokens"] = 4
         sampling_params["stream"] = False
 

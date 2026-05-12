@@ -28,6 +28,7 @@ from vllm.tracing import (
 )
 from vllm.utils import length_from_prompt_token_ids_or_embeds
 from vllm.v1.engine import EngineCoreOutput, EngineCoreRequest, FinishReason
+from vllm.logprobs import Logprob
 from vllm.v1.engine.detokenizer import IncrementalDetokenizer
 from vllm.v1.engine.logprobs import LogprobsProcessor
 from vllm.v1.engine.parallel_sampling import ParentRequest
@@ -572,6 +573,81 @@ class OutputProcessor:
             # Queue the streaming update otherwise.
             req_state.input_chunk_queue.append(update)
 
+    def _make_beam_search_request_output(
+        self, req_state: RequestState, engine_core_output: EngineCoreOutput, finish_reason: FinishReason | None
+    ) -> RequestOutput | None:
+        if finish_reason is None:
+            # Beam search only returns final output
+            return None
+
+        # Extract beam outputs
+        beams = []
+        if engine_core_output.new_logprobs is not None:
+            token_ids_array = engine_core_output.new_logprobs.logprob_token_ids
+            logprobs_array = engine_core_output.new_logprobs.logprobs
+            
+            # The flattened arrays have shape (num_beams * max_tokens, 1)
+            MAX_TOKENS = req_state.max_tokens_param or 1
+            if token_ids_array.shape[0] > 0:
+                BEAM_WIDTH = token_ids_array.shape[0] // MAX_TOKENS
+            else:
+                BEAM_WIDTH = 0
+                
+            for b in range(BEAM_WIDTH):
+                beam_tokens = []
+                beam_logprob_sum = 0.0
+                beam_logprobs = []
+                # Decode each beam
+                for t in range(MAX_TOKENS):
+                    idx = b * MAX_TOKENS + t
+                    if idx < token_ids_array.shape[0]:
+                        token_id = int(token_ids_array[idx, 0])
+                        # Filter out padding token ids (typically < 0)
+                        if token_id >= 0:
+                            beam_tokens.append(token_id)
+                            token_logprob = float(logprobs_array[idx, 0]) if logprobs_array is not None else 0.0
+                            beam_logprob_sum += token_logprob
+                            decoded = self.tokenizer.decode([token_id])
+                            lp = Logprob(
+                                logprob=token_logprob,
+                                rank=1,
+                                decoded_token=decoded,
+                            )
+                            beam_logprobs.append({token_id: lp})
+                
+                beam_text = self.tokenizer.decode(beam_tokens)
+                
+                completion = CompletionOutput(
+                    index=b,
+                    text=beam_text.strip(),
+                    token_ids=beam_tokens,
+                    cumulative_logprob=beam_logprob_sum,
+                    logprobs=beam_logprobs,
+                    finish_reason=str(finish_reason),
+                    stop_reason=None,
+                )
+                beams.append(completion)
+
+        # Return only the requested number of beams (n)
+        target_n = req_state.n or 1
+        if req_state.use_beam_search:
+            if target_n <= 1:
+                target_n = len(beams)
+        if len(beams) > target_n:
+            beams = beams[:target_n]
+            
+        return RequestOutput(
+            request_id=req_state.external_req_id,
+            prompt=req_state.prompt,
+            prompt_token_ids=req_state.prompt_token_ids or [],
+            prompt_logprobs=None,
+            outputs=beams,
+            finished=True,
+            metrics=req_state.stats,
+            lora_request=req_state.lora_request,
+            num_cached_tokens=req_state.num_cached_tokens,
+        )
+
     def process_outputs(
         self,
         engine_core_outputs: list[EngineCoreOutput],
@@ -628,48 +704,37 @@ class OutputProcessor:
                     )
                 req_state.is_prefilling = False
 
-            if pooling_output is None:
-                assert req_state.detokenizer is not None
-                assert req_state.logprobs_processor is not None
-                # 2) Detokenize the token ids into text and perform stop checks.
-                stop_string = req_state.detokenizer.update(
-                    new_token_ids, finish_reason == FinishReason.STOP
-                )
-                if stop_string:
-                    finish_reason = FinishReason.STOP
-                    stop_reason = stop_string
-
-                # 3) Compute sample and prompt logprobs for request,
-                # if required.
-                req_state.logprobs_processor.update_from_output(engine_core_output)
-
-            # HACK for testing: Print all beams if it is a beam search request!
             if getattr(req_state, "use_beam_search", False):
-                print(f"\n[HACK] All beams for request {req_id}:")
-                if engine_core_output.new_logprobs is not None:
-                    token_ids_array = engine_core_output.new_logprobs.logprob_token_ids
-                    print(f"  Raw token IDs shape: {token_ids_array.shape}")
-                    # Dynamically unpack beam_width=30 and max_tokens=4
-                    BEAM_WIDTH = 30
-                    MAX_TOKENS = 4
-                    for b in range(BEAM_WIDTH):
-                        beam_tokens = []
-                        for t in range(MAX_TOKENS):
-                            idx = b * MAX_TOKENS + t
-                            if idx < token_ids_array.shape[0]:
-                                beam_tokens.append(int(token_ids_array[idx, 0]))
-                        beam_text = self.tokenizer.decode(beam_tokens)
-                        print(f"    Beam {b}: {beam_text.strip()}")
+                request_output = self._make_beam_search_request_output(
+                    req_state, engine_core_output, finish_reason
+                )
+            else:
+                if pooling_output is None:
+                    assert req_state.detokenizer is not None
+                    assert req_state.logprobs_processor is not None
+                    # 2) Detokenize the token ids into text and perform stop checks.
+                    stop_string = req_state.detokenizer.update(
+                        new_token_ids, finish_reason == FinishReason.STOP
+                    )
+                    if stop_string:
+                        finish_reason = FinishReason.STOP
+                        stop_reason = stop_string
 
-            # 4) Create and handle RequestOutput objects.
-            if request_output := req_state.make_request_output(
-                new_token_ids,
-                pooling_output,
-                finish_reason,
-                stop_reason,
-                kv_transfer_params,
-                routed_experts,
-            ):
+                    # 3) Compute sample and prompt logprobs for request,
+                    # if required.
+                    req_state.logprobs_processor.update_from_output(engine_core_output)
+
+                # 4) Create and handle RequestOutput objects.
+                request_output = req_state.make_request_output(
+                    new_token_ids,
+                    pooling_output,
+                    finish_reason,
+                    stop_reason,
+                    kv_transfer_params,
+                    routed_experts,
+                )
+
+            if request_output:
                 if req_state.streaming_input:
                     request_output.finished = False
 

@@ -1509,9 +1509,11 @@ class Scheduler(SchedulerInterface):
             ):
                 num_positions = len(new_token_ids)
                 if request.sampling_params and getattr(request.sampling_params, "use_beam_search", False):
-                    beam_width = 30
-                    if request.sampling_params.extra_args:
+                    beam_width = getattr(request.sampling_params, "n", 1) or 1
+                    if beam_width <= 1 and request.sampling_params.extra_args:
                         beam_width = request.sampling_params.extra_args.get("beam_width", 30)
+                    elif beam_width <= 1:
+                        beam_width = 30
                     num_positions = beam_width * len(new_token_ids)
                 new_logprobs = logprobs.slice_request(req_index, num_positions)
 
