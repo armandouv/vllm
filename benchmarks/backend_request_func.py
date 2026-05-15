@@ -310,53 +310,67 @@ async def async_request_openai_completions(
         generated_text = ""
         st = time.perf_counter()
         most_recent_timestamp = st
-        print(f"DEBUG sending payload stream: {payload.get('stream')}")
         try:
             async with session.post(
                 url=api_url, json=payload, headers=headers
             ) as response:
                 if response.status == 200:
-                    first_chunk_received = False
-                    async for chunk_bytes in response.content:
-                        chunk_bytes = chunk_bytes.strip()
-                        if not chunk_bytes:
-                            continue
-
-                        chunk = chunk_bytes.decode("utf-8").removeprefix("data: ")
-                        if chunk != "[DONE]":
-                            data = json.loads(chunk)
-
-                            # NOTE: Some completion API might have a last
-                            # usage summary response without a token so we
-                            # want to check a token was generated
-                            if choices := data.get("choices"):
-                                # Note that text could be empty here
-                                # e.g. for special tokens
-                                text = choices[0].get("text")
-                                timestamp = time.perf_counter()
-                                # First token
-                                if not first_chunk_received:
-                                    first_chunk_received = True
-                                    ttft = time.perf_counter() - st
-                                    output.ttft = ttft
-
-                                # Decoding phase
-                                else:
-                                    output.itl.append(timestamp - most_recent_timestamp)
-
-                                most_recent_timestamp = timestamp
-                                generated_text += text or ""
-                            if usage := data.get("usage"):
-                                print(f"DEBUG usage: {usage}")
-                                output.output_tokens = usage.get("completion_tokens")
-                    if first_chunk_received:
-                        output.success = True
+                    if not payload.get("stream", False):
+                        data = await response.json()
+                        most_recent_timestamp = time.perf_counter()
+                        if usage := data.get("usage"):
+                            output.output_tokens = usage.get("completion_tokens")
+                        
+                        if choices := data.get("choices"):
+                            text = choices[0].get("text")
+                            output.ttft = most_recent_timestamp - st
+                            generated_text = text or ""
+                            output.success = True
+                        else:
+                            output.success = False
+                            output.error = "No choices in response."
                     else:
-                        output.success = False
-                        output.error = (
-                            "Never received a valid chunk to calculate TTFT."
-                            "This response will be marked as failed!"
-                        )
+                        first_chunk_received = False
+                        async for chunk_bytes in response.content:
+                            chunk_bytes = chunk_bytes.strip()
+                            if not chunk_bytes:
+                                continue
+
+                            chunk = chunk_bytes.decode("utf-8").removeprefix("data: ")
+                            if chunk != "[DONE]":
+                                data = json.loads(chunk)
+
+                                # NOTE: Some completion API might have a last
+                                # usage summary response without a token so we
+                                # want to check a token was generated
+                                if choices := data.get("choices"):
+                                    # Note that text could be empty here
+                                    # e.g. for special tokens
+                                    text = choices[0].get("text")
+                                    timestamp = time.perf_counter()
+                                    # First token
+                                    if not first_chunk_received:
+                                        first_chunk_received = True
+                                        ttft = time.perf_counter() - st
+                                        output.ttft = ttft
+
+                                    # Decoding phase
+                                    else:
+                                        output.itl.append(timestamp - most_recent_timestamp)
+
+                                    most_recent_timestamp = timestamp
+                                    generated_text += text or ""
+                                if usage := data.get("usage"):
+                                    print(f"DEBUG usage: {usage}")
+                                    output.output_tokens = usage.get("completion_tokens")
+                        if first_chunk_received:
+                            output.success = True
+                        else:
+                            output.success = False
+                            output.error = (
+                                "Never received a valid chunk to calculate TTFT."
+                                "This response will be marked as failed!"
+                            )
                     output.generated_text = generated_text
                     output.latency = most_recent_timestamp - st
                 else:

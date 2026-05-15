@@ -576,10 +576,6 @@ class OutputProcessor:
     def _make_beam_search_request_output(
         self, req_state: RequestState, engine_core_output: EngineCoreOutput, finish_reason: FinishReason | None
     ) -> RequestOutput | None:
-        if finish_reason is None:
-            # Beam search only returns final output
-            return None
-
         # Extract beam outputs
         beams = []
         if engine_core_output.new_logprobs is not None:
@@ -595,8 +591,8 @@ class OutputProcessor:
                 
             for b in range(BEAM_WIDTH):
                 beam_tokens = []
-                beam_logprob_sum = 0.0
-                beam_logprobs = []
+                # We stored cumulative logprob at the first token of each beam's block
+                beam_logprob_sum = float(logprobs_array[b * MAX_TOKENS, 0]) if logprobs_array is not None else 0.0
                 # Decode each beam
                 for t in range(MAX_TOKENS):
                     idx = b * MAX_TOKENS + t
@@ -605,15 +601,6 @@ class OutputProcessor:
                         # Filter out padding token ids (typically < 0)
                         if token_id >= 0:
                             beam_tokens.append(token_id)
-                            token_logprob = float(logprobs_array[idx, 0]) if logprobs_array is not None else 0.0
-                            beam_logprob_sum += token_logprob
-                            decoded = self.tokenizer.decode([token_id])
-                            lp = Logprob(
-                                logprob=token_logprob,
-                                rank=1,
-                                decoded_token=decoded,
-                            )
-                            beam_logprobs.append({token_id: lp})
                 
                 beam_text = self.tokenizer.decode(beam_tokens)
                 
@@ -622,7 +609,7 @@ class OutputProcessor:
                     text=beam_text.strip(),
                     token_ids=beam_tokens,
                     cumulative_logprob=beam_logprob_sum,
-                    logprobs=beam_logprobs,
+                    logprobs=None,
                     finish_reason=str(finish_reason),
                     stop_reason=None,
                 )

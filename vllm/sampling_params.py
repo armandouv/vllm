@@ -535,6 +535,11 @@ class SamplingParams(
                 "stop strings are only supported when detokenize is True. "
                 "Set detokenize=True to use stop."
             )
+        if self.use_beam_search and (self.logprobs is not None or self.prompt_logprobs is not None):
+            raise ValueError(
+                "Beam search does not support returning logprobs. "
+                "Please set logprobs to None when use_beam_search is True."
+            )
 
     def _verify_greedy_sampling(self) -> None:
         if self.n > 1 and not self.use_beam_search:

@@ -466,6 +466,7 @@ class CompletionResponseChoice(OpenAIBaseModel):
             "including encountering the EOS token"
         ),
     )
+    cumulative_logprob: float | None = None
     token_ids: list[int] | None = None  # For response
     prompt_logprobs: list[dict[int, Logprob] | None] | None = None
     prompt_token_ids: list[int] | None = None  # For prompt

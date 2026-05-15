@@ -534,6 +534,7 @@ class OpenAIServingCompletion(OpenAIServing):
                     logprobs=logprobs,
                     finish_reason=output.finish_reason,
                     stop_reason=output.stop_reason,
+                    cumulative_logprob=output.cumulative_logprob,
                     prompt_logprobs=final_res.prompt_logprobs,
                     prompt_token_ids=(
                         prompt_token_ids if request.return_token_ids else None

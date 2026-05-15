@@ -1504,7 +1504,7 @@ class Scheduler(SchedulerInterface):
             # Extract sample logprobs if needed.
             if (
                 request.sampling_params is not None
-                and request.sampling_params.logprobs is not None
+                and (request.sampling_params.logprobs is not None or getattr(request.sampling_params, "use_beam_search", False))
                 and logprobs
             ):
                 num_positions = len(new_token_ids)
