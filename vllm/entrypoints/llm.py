@@ -796,6 +796,12 @@ class LLM:
                     lora_requests=[beam.lora_request for beam in all_beams],
                     use_tqdm=False,
                 )
+                
+                print(f"CPU Step {_} all_beams count: {len(all_beams)}")
+                for idx, res in enumerate(output):
+                     if res.outputs[0].logprobs is not None:
+                         top_items = list(res.outputs[0].logprobs[0].items())[:30]
+                         print(f"CPU Step {_} instance {idx} top 30 logprobs: {[(k, v.logprob) for k, v in top_items]}")
 
                 for (start, end), instance in zip(
                     instance_start_and_end, instances_batch

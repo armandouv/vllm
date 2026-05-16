@@ -402,7 +402,7 @@ class DefaultModelLoader(BaseModelLoader):
             if self.enable_weights_track is not None
             else default_enable_weights_track
         )
-        if enable_weights_track:
+        if enable_weights_track and hasattr(model, "named_modules"):
             self.track_weights_loading(model, loaded_weights)
 
     def track_weights_loading(

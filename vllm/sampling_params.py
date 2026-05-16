@@ -264,6 +264,8 @@ class SamplingParams(
     include_stop_str_in_output: bool = False
     """Whether to include the stop strings in output text."""
     output_kind: RequestOutputKind = RequestOutputKind.CUMULATIVE
+    use_beam_search: bool = False
+    """Whether to use beam search for generation."""
     skip_clone: bool = False
     """Internal flag indicating that this SamplingParams instance is safe to
     reuse without cloning. When True, clone() will return self without
@@ -339,6 +341,7 @@ class SamplingParams(
         logit_bias: dict[int, float] | dict[str, float] | None = None,
         allowed_token_ids: list[int] | None = None,
         extra_args: dict[str, Any] | None = None,
+        use_beam_search: bool = False,
         skip_clone: bool = False,
         repetition_detection: RepetitionDetectionParams | None = None,
     ) -> "SamplingParams":
@@ -380,6 +383,7 @@ class SamplingParams(
             logit_bias=logit_bias,
             allowed_token_ids=allowed_token_ids,
             extra_args=extra_args,
+            use_beam_search=use_beam_search,
             skip_clone=skip_clone,
             repetition_detection=repetition_detection,
         )
@@ -531,9 +535,14 @@ class SamplingParams(
                 "stop strings are only supported when detokenize is True. "
                 "Set detokenize=True to use stop."
             )
+        if self.use_beam_search and (self.logprobs is not None or self.prompt_logprobs is not None):
+            raise ValueError(
+                "Beam search does not support returning logprobs. "
+                "Please set logprobs to None when use_beam_search is True."
+            )
 
     def _verify_greedy_sampling(self) -> None:
-        if self.n > 1:
+        if self.n > 1 and not self.use_beam_search:
             raise ValueError(f"n must be 1 when using greedy sampling, got {self.n}.")
 
     def update_from_generation_config(
@@ -942,3 +951,4 @@ class BeamSearchParams(
     temperature: float = 0.0
     length_penalty: float = 1.0
     include_stop_str_in_output: bool = False
+    extra_args: dict[str, Any] | None = None

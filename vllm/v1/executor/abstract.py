@@ -129,12 +129,19 @@ class Executor(ABC):
         # process config is never updated. Use max across workers since they
         # compile in parallel.
         if compilation_times:
-            self.vllm_config.compilation_config.compilation_time = max(
-                t.language_model for t in compilation_times
-            )
-            self.vllm_config.compilation_config.encoder_compilation_time = max(
-                t.encoder for t in compilation_times
-            )
+            first_t = compilation_times[0]
+            if isinstance(first_t, (int, float)):
+                # Old style (e.g. TPUWorker) returns a single float representing language model time.
+                self.vllm_config.compilation_config.compilation_time = float(max(compilation_times))
+                self.vllm_config.compilation_config.encoder_compilation_time = 0.0
+            else:
+                # New style returns CompilationTimes object.
+                self.vllm_config.compilation_config.compilation_time = max(
+                    t.language_model for t in compilation_times
+                )
+                self.vllm_config.compilation_config.encoder_compilation_time = max(
+                    t.encoder for t in compilation_times
+                )
 
     def register_failure_callback(self, callback: FailureCallback):  # noqa: B027
         """

@@ -375,7 +375,7 @@ class AsyncLLM(EngineClient):
         # Use cloned params that may have been updated in process_inputs()
         params = request.params
 
-        if is_pooling or params.n == 1:
+        if is_pooling or params.n == 1 or getattr(params, "use_beam_search", False):
             await self._add_request(request, prompt_text, None, 0, queue)
             return queue
 

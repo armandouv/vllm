@@ -384,6 +384,14 @@ class Scheduler(SchedulerInterface):
 
         self.kv_cache_manager.new_step_starts()
 
+        # Isolate running beam search requests to prevent mixing with normal decodes!
+        original_running = self.running
+        running_beam_searches = [r for r in self.running if r.sampling_params and getattr(r.sampling_params, "use_beam_search", False)]
+        
+        if running_beam_searches:
+            self.running = [running_beam_searches[0]]
+            logger.debug(f"Isolating single running beam request {self.running[0].request_id} for scheduling")
+
         # First, schedule the RUNNING requests.
         req_index = 0
         while req_index < len(self.running) and token_budget > 0:
@@ -564,11 +572,15 @@ class Scheduler(SchedulerInterface):
             )
             assert len(scheduled_loras) <= self.lora_config.max_loras
 
+        # Restore original self.running list!
+        self.running = original_running
+
         # Next, schedule the WAITING requests.
         if not preempted_reqs and self._pause_state == PauseState.UNPAUSED:
             step_skipped_waiting = create_request_queue(self.policy)
+            break_after_this = False
 
-            while (self.waiting or self.skipped_waiting) and token_budget > 0:
+            while (self.waiting or self.skipped_waiting) and token_budget > 0 and not running_beam_searches:
                 if len(self.running) == self.max_num_running_reqs:
                     break
 
@@ -577,6 +589,20 @@ class Scheduler(SchedulerInterface):
 
                 request = request_queue.peek_request()
                 request_id = request.request_id
+
+                is_beam_search = request.sampling_params and getattr(request.sampling_params, "use_beam_search", False)
+                orig_req_id = request_id.split("-beam-")[0] if "-beam-" in request_id else request_id
+
+                all_scheduled = scheduled_new_reqs + scheduled_resumed_reqs + scheduled_running_reqs
+
+                if is_beam_search:
+                    if scheduled_new_reqs or scheduled_resumed_reqs or scheduled_running_reqs:
+                        request_queue.pop_request()
+                        step_skipped_waiting.prepend_request(request)
+                        continue
+                    else:
+                        break_after_this = True
+                        logger.info(f"DEBUG: Isolating waiting beam search request {request_id} for scheduling")
 
                 # try to promote blocked statuses while traversing skipped queue.
                 if self._is_blocked_waiting_status(
@@ -681,15 +707,28 @@ class Scheduler(SchedulerInterface):
 
                     # chunked prefill has to be enabled explicitly to allow
                     # pooling requests to be chunked
+                    num_new_tokens_for_budget = num_new_tokens
+                    if is_beam_search:
+                        already_has_parent = False
+                        for r in scheduled_new_reqs + scheduled_resumed_reqs + scheduled_running_reqs:
+                            r_parent = r.request_id.split("-beam-")[0] if "-beam-" in r.request_id else r.request_id
+                            if r_parent == orig_req_id:
+                                already_has_parent = True
+                                break
+                        if already_has_parent:
+                            num_new_tokens_for_budget = 0
+
                     if (
                         not self.scheduler_config.enable_chunked_prefill
-                        and num_new_tokens > token_budget
+                        and num_new_tokens_for_budget > token_budget
                     ):
                         # If chunked_prefill is disabled,
                         # we can stop the scheduling here.
                         break
 
-                    num_new_tokens = min(num_new_tokens, token_budget)
+                    if num_new_tokens_for_budget > 0:
+                        num_new_tokens = min(num_new_tokens, token_budget)
+
                     assert num_new_tokens > 0
 
                     # Schedule encoder inputs.
@@ -835,7 +874,21 @@ class Scheduler(SchedulerInterface):
                     request_id
                 )
                 num_scheduled_tokens[request_id] = num_new_tokens
-                token_budget -= num_new_tokens
+                
+                # Recalculate budget consumption!
+                num_new_tokens_for_budget = num_new_tokens
+                if is_beam_search:
+                    already_has_parent = False
+                    for r in scheduled_new_reqs + scheduled_resumed_reqs + scheduled_running_reqs:
+                        if r != request:
+                            r_parent = r.request_id.split("-beam-")[0] if "-beam-" in r.request_id else r.request_id
+                            if r_parent == orig_req_id:
+                                already_has_parent = True
+                                break
+                    if already_has_parent:
+                        num_new_tokens_for_budget = 0
+                        
+                token_budget -= num_new_tokens_for_budget
                 request.status = RequestStatus.RUNNING
                 request.num_computed_tokens = num_computed_tokens
                 # Encoder-related.
@@ -853,6 +906,9 @@ class Scheduler(SchedulerInterface):
                         self.encoder_cache_manager.allocate(request, i)
                         if self.ec_connector is not None:
                             self.ec_connector.update_state_after_alloc(request, i)
+                            
+                if break_after_this:
+                    break
 
             # re-queue requests skipped in this pass ahead of older skipped items.
             if step_skipped_waiting:
@@ -1448,10 +1504,18 @@ class Scheduler(SchedulerInterface):
             # Extract sample logprobs if needed.
             if (
                 request.sampling_params is not None
-                and request.sampling_params.logprobs is not None
+                and (request.sampling_params.logprobs is not None or getattr(request.sampling_params, "use_beam_search", False))
                 and logprobs
             ):
-                new_logprobs = logprobs.slice_request(req_index, len(new_token_ids))
+                num_positions = len(new_token_ids)
+                if request.sampling_params and getattr(request.sampling_params, "use_beam_search", False):
+                    beam_width = getattr(request.sampling_params, "n", 1) or 1
+                    if beam_width <= 1 and request.sampling_params.extra_args:
+                        beam_width = request.sampling_params.extra_args.get("beam_width", 30)
+                    elif beam_width <= 1:
+                        beam_width = 30
+                    num_positions = beam_width * len(new_token_ids)
+                new_logprobs = logprobs.slice_request(req_index, num_positions)
 
             if num_nans_in_logits is not None and req_id in num_nans_in_logits:
                 request.num_nans_in_logits = num_nans_in_logits[req_id]
@@ -1639,15 +1703,17 @@ class Scheduler(SchedulerInterface):
         # a request is still being prefilled, we expect the model runner
         # to return empty token ids for the request.
         stopped = False
+        is_beam_search = request.sampling_params and getattr(request.sampling_params, "use_beam_search", False)
         for num_new, output_token_id in enumerate(new_token_ids, 1):
             request.append_output_token_ids(output_token_id)
 
-            # Check for stop and update request state.
-            # This must be called before we make the EngineCoreOutput.
-            stopped = check_stop(request, self.max_model_len)
-            if stopped:
-                del new_token_ids[num_new:]  # Trim new tokens if needed.
-                break
+            if not stopped:
+                # Check for stop and update request state.
+                # This must be called before we make the EngineCoreOutput.
+                stopped = check_stop(request, self.max_model_len)
+                if stopped and not is_beam_search:
+                    del new_token_ids[num_new:]  # Trim new tokens if needed.
+                    break
         return new_token_ids, stopped
 
     def _free_encoder_inputs(self, request: Request) -> None:

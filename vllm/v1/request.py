@@ -101,7 +101,10 @@ class Request:
         elif sampling_params is not None:
             # Generative models.
             assert sampling_params.max_tokens is not None
-            self.max_tokens = sampling_params.max_tokens
+            if getattr(sampling_params, "use_beam_search", False):
+                self.max_tokens = 1
+            else:
+                self.max_tokens = sampling_params.max_tokens
             if self.structured_output_request is not None:
                 self.status = RequestStatus.WAITING_FOR_STRUCTURED_OUTPUT_GRAMMAR
 
